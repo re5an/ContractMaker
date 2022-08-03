@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0
+// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
 import '@openzeppelin/contracts/token/ERC20/IERC20.sol';
@@ -21,7 +21,8 @@ contract Freezable {
 
 contract PaymentContract is Freezable {
 
-    address public admin;
+    address public admin; // factory is admin
+    address superAdmin; // want to make it possible to set non-contract admin
     modifier isAdmin {
         require(admin == msg.sender, 'only admin');
         _;
@@ -45,16 +46,15 @@ contract PaymentContract is Freezable {
         bool paid;
     }
 
-
-    uint public contractAmount;
+    uint serviceProviderShare;
+    uint public contractAmount;  // total contract token amount
 
     uint installmentCount;
-
-    mapping (uint => Parts) public installments;  // 
+    mapping (uint => Parts) public installments;  //
 
 
     // uint public tm;
-    function time() public view returns (uint) {
+    function timeNow() public view returns (uint) {
         // tm = block.timestamp;
         return block.timestamp;
     }
@@ -82,24 +82,63 @@ contract PaymentContract is Freezable {
         return _sum;
     }
 
+    //--- Total amount that Payer has to freeze
+    function totalPayerAmountToFreeze() internal view returns (uint) {
+        //--- extra = amount that is ours as service provider
+        return contractAmount + payerFineAmount + serviceProviderShare;
+    }
+
     function findFirstUnpaid() public view returns (uint){
         for(uint i; i < installmentCount; i++){
             if (installments[i].paid != true){
                 return i;
             }
         }
-        return 666;
+        return 999666; //not found any
     }
 
     event AmountFrozen(address indexed _from, uint _amount, address _to, uint indexed _date);
 
-    function userToContract(uint _amount) public {
-        require(_amount > 0, "The amount is 0");
-        require(token.balanceOf(address(this)) > _amount, "");
-        uint256 _allowance = token.allowance(msg.sender, address(this));
-        require(_allowance >= _amount, "Check the token Allowance");
-        token.transferFrom(msg.sender, address(this), _amount);
-        emit AmountFrozen(msg.sender, _amount, address(this), block.timestamp);
+    function receiverDepositFine(uint _amount) external {
+        require(receiverFineAmount <= _amount, "wrong amount");
+        userToContract(_amount, receiver);
+    }
+
+    function payerDepositContractAmount(uint _extra) external {
+        require(totalPayerAmountToFreeze() > contractAmount, "wrong amount");
+        userToContract(totalPayerAmountToFreeze(), payer);
+    }
+
+    function userToContract(uint _amount, address _payer) public {
+        require(_amount > 0, "Amount is 0");
+        // require(token.balanceOf(address(this)) > _amount, "low balance");
+        uint256 _allowance = token.allowance(_payer, address(this));
+        require(_allowance >= _amount, "Low Token Allowance");
+        token.transferFrom(_payer, address(this), _amount);
+        emit AmountFrozen(_payer, _amount, address(this), block.timestamp);
+    }
+
+    //--- Withraw serviceProviderShare to Admin address
+    function takeOurShare() isAdmin external {
+        transferFromContract(payable(admin), serviceProviderShare);
+    }
+    //--- Withraw any amount to any introduced address
+    function adminWithraw(address _to, uint _amount) isAdmin external {
+        transferFromContract(payable(_to), _amount);
+    }
+
+    event withraw(uint _amount, address indexed _to, uint _time);
+    function transferFromContract(address payable _to, uint _amount) internal {
+        require(_amount > 0, "You need to Buy More than Zero");
+        uint256 dexBalance = token.balanceOf(address(this));
+        require(_amount <= dexBalance, "Not enough tokens in the reserve");
+        token.transfer(_to, _amount);
+        emit withraw(_amount, _to, block.timestamp);
+    }
+
+    //--- If want to do multicall, we have to take its encoded data, which this func provides
+    function setInstallmentABI(uint _time, uint _amount) pure public returns(bytes memory){
+        return abi.encodeWithSignature("setInstallment(uint,uint)", _time, _amount);
     }
 
     function setContractAmount(uint _amount) public {
@@ -134,4 +173,27 @@ contract PaymentContract is Freezable {
 
 contract contractMaker is Freezable {
     // contracts
+    PaymentContract[] public contracts;
+    mapping (uint => PaymentContract) public paymentContract;
+    uint contractsCount;
+    function createContract() external {
+
+        PaymentContract newContract = new PaymentContract();//
+        contracts.push(newContract);
+        // paymentContract[contractsCount] = new PaymentContract();//
+        // paymentContract[contractsCount] = newContract;
+        // contractsCount++;
+    }
+
+    constructor () payable{
+        contractsCount = 0;
+    }
+
+    function setInstallment(uint _contractID, uint _time, uint _amount) external returns(bool) {
+        //--- check and validate
+        contracts[_contractID].setInstallment(_time, _amount);
+        return true;
+    }
+
+
 }

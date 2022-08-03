@@ -1,117 +1,128 @@
-// SPDX-License-Identifier: GPL-3.0
+// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
 import '@openzeppelin/contracts/token/ERC20/IERC20.sol';
-import './token.sol';
 
-
-contract Freezable {
-  bool freeze = false;
-
-  function setFreeze(bool _freeze) external {
-    freeze = _freeze;
-  }
-
-  modifier frozen() {
-    require(freeze, 'contract is frozen');
-    _;
-  }
-
-}
-
-contract PaymentContract is Freezable {
-
+contract PaymentProcessor {
   address public admin;
-  modifier isAdmin {
-    require(admin == msg.sender, 'only admin');
+  IERC20 public token;
+
+  //----------- Events -----------//
+
+//  event ContractRegistered (address indexed _from, address indexed _to, uint _amount, uint _waybillID, uint indexed _date);
+  event TokenSold (address indexed _from, uint _amount, uint indexed _date);
+  event TokenBought (address indexed _to, uint _amount, uint indexed _date);
+  event PaidReceiver(string indexed _waybillID, address indexed _from, uint _amount, address _to, uint indexed _date);
+  event AmountFrozen(string indexed _waybillID, address indexed _from, uint _amount, address _to, uint indexed _date);
+
+  //----------- Admin -----------//
+
+
+  modifier onlyAdmin() {
+    require(msg.sender == admin, "Caller is not admin");
     _;
   }
 
-  IERC20 public token;
-  function setToken(address tokenAddress) isAdmin public{
+//  constructor(address adminAddress, address tokenAddress) public {
+  constructor( address tokenAddress) public {
+    admin = msg.sender;
+//    admin = adminAddress;
     token = IERC20(tokenAddress);
   }
 
-  address payer;
-  address receiver;
-  address judge;
 
-  struct Parts {
-    uint time;
-    uint amount;
-    bool paid;
-  }
+  //----------- Tokenomics -----------//
+//  function userToContract(string memory _paymentID, uint _amount) public {
+//    token.transferFrom(msg.sender, address(this), _amount);
+//    emit AmountFrozen(_paymentID, msg.sender, _amount, address(this), block.timestamp);
+//  }
+//
+//
+//  function transferFromContractToReceiver(address payable _to, uint _amount, string memory _paymentID, address _from) external {
+//    token.transfer(_to, _amount);
+//    emit PaidReceiver(_paymentID, _from, _amount, _to, block.timestamp);
+//  }
 
-
-  //public uint totalAmount;
-
-  uint installmentCount;
-
-  mapping (uint => Parts) public installments;  //
-
-
-  // uint public tm;
-  function time() public view returns (uint) {
-    // tm = block.timestamp;
-    return block.timestamp;
-  }
-
-  constructor () {
-    admin = msg.sender;
-    judge = admin;
-    installmentCount = 0;
-  }
-
-  function setPayer(address _payer) external {
-    payer = _payer;
-  }
-
-  function setReceiver(address _receiver) external {
-    receiver = _receiver;
-  }
-
-  function setJudge(address _judge) external {
-    judge = _judge;
-  }
-
-  function setInstallment(uint _time, uint _amount) external {
-    installments[installmentCount].amount = _amount;
-    installments[installmentCount].time = _time;
-    installments[installmentCount].paid = false;
-    installmentCount++;
-  }
-
-  function totalAmount() external view returns (uint) {
-    uint _sum = 0;
-    for(uint i; i < installmentCount; i++){
-      _sum += installments[i].amount;
-    }
-    return _sum;
-  }
-
-  function findFirstUnpaid() public view returns (uint){
-    for(uint i; i < installmentCount; i++){
-      if (installments[i].paid != true){
-        return i;
-      }
-    }
-    return 666;
-  }
-
-  event AmountFrozen(address indexed _from, uint _amount, address _to, uint indexed _date);
-
-  function userToContract(uint _amount) public {
-    require(_amount > 0, "The amount is 0");
-    require(token.balanceOf(address(this)) > _amount, "");
+  function userToContract(string memory _paymentID, uint _amount) public {
+    require(_amount > 0, "You need to put at least some tokens");
     uint256 _allowance = token.allowance(msg.sender, address(this));
-    require(_allowance >= _amount, "Check the token Allowance");
+    require(_allowance >= amount, "Check the token Allowance");
     token.transferFrom(msg.sender, address(this), _amount);
-    emit AmountFrozen(msg.sender, _amount, address(this), block.timestamp);
+    emit AmountFrozen(_paymentID, msg.sender, _amount, address(this), block.timestamp);
   }
 
-  // So that it can receive ETH from other contracts
-  fallback() external payable {}
-  receive() external payable {}
+
+  function transferFromContractToReceiver(address payable _to, uint _amount, string memory _paymentID, address _from) external {
+    require(_amount > 0, "You need to Buy More than Zero");
+    uint256 dexBalance = token.balanceOf(address(this));
+    require(_amount <= dexBalance, "Not enough tokens in the reserve");
+    token.transfer(_to, _amount);
+    emit PaidReceiver(_paymentID, _from, _amount, _to, block.timestamp);
+  }
+
+//  function buyToken(uint _amount) external {
+//    token.transfer(msg.sender, _amount);
+//    emit TokenBought(msg.sender, _amount, block.timestamp);
+//  }
+//
+//  function sellToken(uint _amount) public {
+//    token.transferFrom(msg.sender, address(this), _amount);
+//    emit TokenSold(msg.sender, _amount, block.timestamp);
+//  }
+
+  function buyToken(uint _amount) external {
+    require(_amount > 0, "You need to Buy More than Zero");
+    uint256 dexBalance = token.balanceOf(address(this));
+    require(_amount <= dexBalance, "Not enough tokens in the reserve");
+    token.transfer(msg.sender, _amount);
+    emit TokenBought(msg.sender, _amount, block.timestamp);
+  }
+
+  function sellToken(uint _amount) public {
+    require(_amount > 0, "You need to sell at least some tokens");
+    uint256 _allowance = token.allowance(msg.sender, address(this));
+    require(_allowance >= amount, "Check the token Allowance");
+    token.transferFrom(msg.sender, address(this), _amount);
+    emit TokenSold(msg.sender, _amount, block.timestamp);
+  }
 
 
+  /** -----=== Peg with Ether ===----- **/
+//--- Handled Better
+  function buy() payable public {
+    uint256 amountTobuy = msg.value; //-- UnComment it if want to make it a Peg coin with 1:1 of Eth
+    require(amountTobuy > 0, "You need to send some ether");
+    uint256 dexBalance = token.balanceOf(address(this));
+    require(amountTobuy <= dexBalance, "Not enough tokens in the reserve");
+    token.transfer(msg.sender, amountTobuy);
+    emit TokenBought(msg.sender, _amount, block.timestamp);
+  }
+
+  function sell(uint256 amount) public {
+    require(amount > 0, "You need to sell at least some tokens");
+    uint256 allowance = token.allowance(msg.sender, address(this));
+    require(allowance >= amount, "Check the token allowance");
+    token.transferFrom(msg.sender, address(this), amount);
+    msg.sender.transfer(amount); //-- This is to transfer equal amount of Eth (like Peg ?)
+    emit TokenSold(msg.sender, _amount, block.timestamp);
+  }
+
+  //  function pay(uint amount, uint paymentId) external {
+  //    token.transferFrom(msg.sender, admin, amount);
+  //    emit PaymentDone(msg.sender, amount, paymentId, block.timestamp);
+  //  }
+
+
+  //----------- Other  -----------//
+  //   function newAdmin() public {
+  //     admin = msg.sender;
+  //   }
+
+  function resetToken(address _tokenAddress) external onlyAdmin{
+    token = IERC20(_tokenAddress);
+  }
+
+  function balanceOfContractToken() onlyAdmin external view returns(uint) {
+    return token.balanceOf(address(this));
+  }
 }
