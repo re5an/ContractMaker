@@ -63,11 +63,6 @@ contract PaymentContract is Freezable {
     mapping (uint => Parts) public installments;  //--- detail of each payment
 
 
-
-    // function timeNow() public view returns (uint) {
-    // return block.timestamp;
-    // }
-
     // constructor (address _payer, address _receiver, uint _count, uint _totalAmount, address _token , uint _id) {
     //     admin = msg.sender;
     //     judge = admin;
@@ -98,19 +93,6 @@ contract PaymentContract is Freezable {
     }
 
 
-    // constructor (address _payer, address _receiver, uint _count, uint _totalAmount, address _token , uint _id, Parts[] memory _parts) {
-    //     admin = msg.sender;
-    //     judge = admin;
-    //     installmentCount = 0;
-    //     payer = _payer;
-    //     receiver = _receiver;
-    //     totalPaymentsCount = _count;
-    //     contractID = _id;
-    //     token = IERC20(_token);
-    //     contractAmount = _totalAmount;
-    // }
-
-
 
     function setInstallment(uint _time, uint _amount) public {
         // require (totalPaymentsCount > 0 , "paymentCounts not specified");
@@ -129,7 +111,26 @@ contract PaymentContract is Freezable {
         return _sum;
     }
 
-    function setTotalPaymentsCount (uint _num) hasWriteAccess external {
+    function dayCalc(uint _days) public pure returns (uint) {
+        return _days * 3600 * 24;
+    }
+
+    function installmentPartPay(uint _num) public {
+        //--- TODO : check time
+        require(
+            (block.timestamp < (installments[_num].time + dayCalc(1))
+        &&
+        (block.timestamp >= installments[_num].time)
+            ) , "its not time");
+
+        require(!installments[_num].paid, "already paid");
+
+        //--- TODO : transfer tokens
+        token.transfer(receiver, installments[installmentCount].amount);
+        installments[_num].paid = true;
+    }
+
+    function setTotalPaymentsCount(uint _num) external {
         totalPaymentsCount = _num;
     }
 
@@ -217,12 +218,12 @@ contract PaymentContract is Freezable {
     // }
 
     uint immutable contractID;
-    function test_finishContract() public {
-        //--- run contractMaker (admin) to take out this contract from activeContracts
-        //--- Take all its remaining tokens and Ethers/BNB
-        //--- EVENT
-        contractMaker(admin).inActivateContract(contractID); /* Check if makes a new one or uses the already deployed */
-    }
+    // function test_finishContract() public {
+    //     //--- run contractMaker (admin) to take out this contract from activeContracts
+    //     //--- Take all its remaining tokens and Ethers/BNB
+    //     //--- EVENT
+    //     contractMaker(admin).inActivateContract(contractID); /* Check if makes a new one or uses the already deployed */
+    // }
 
     // So that it can receive ETH from other contracts
     fallback() external payable {}
@@ -239,6 +240,7 @@ contract contractMaker is Ownable, Freezable {
     mapping (uint => bool) public activeContracts; // to only check contracts that still are active. When contract finish, it gets false
     uint contractsCount;
 
+    //--- Create contract without installments
     // function createContract(address _payer, address _receiver, uint _paymentsCount, uint _totalAmount, address _token) external {
     //     PaymentContract newContract = new PaymentContract(_payer, _receiver, _paymentsCount, _totalAmount, _token, contractsCount);//
     //     contracts.push(newContract);
@@ -247,7 +249,12 @@ contract contractMaker is Ownable, Freezable {
     //     contractsCount++;
     // }
 
-    function createContract1(address _payer, address _receiver, uint _paymentsCount, uint _totalAmount, address _token, uint[] calldata _partAmounts, uint[] calldata _partTimes) external {
+    //--- Create Contract and put all installments together in one transaction
+    function createContract(address _payer, address _receiver, uint _paymentsCount, uint _totalAmount, address _token, uint[] calldata _partAmounts, uint[] calldata _partTimes) external {
+        //--- Validations
+        validatePaymentAmount(_paymentsCount, _totalAmount, _partAmounts, _partTimes);
+        validatePaymentTimes(_partTimes);
+
         PaymentContract newContract = new PaymentContract(_payer, _receiver, _paymentsCount, _totalAmount, _token, contractsCount, _partAmounts, _partTimes);//
         contracts.push(newContract);
         // paymentContract[contractsCount] = newContract;
@@ -255,40 +262,30 @@ contract contractMaker is Ownable, Freezable {
         contractsCount++;
     }
 
+    function validatePaymentAmount(uint _paymentsCount, uint _totalAmount, uint[] calldata _partAmounts, uint[] calldata _partTimes) pure internal{
+        require(_partAmounts.length == _partTimes.length && _partTimes.length == _paymentsCount, "payments numbers dont match");
 
-    // struct Parts {
-    //     uint time;
-    //     uint amount;
-    //     bool paid;
-    // }
-    // function createContract2(address _payer, address _receiver, uint _paymentsCount, uint _totalAmount, address _token, Parts[] memory _parts) external {
-    //     PaymentContract newContract = new PaymentContract(_payer, _receiver, _paymentsCount, _totalAmount, _token, contractsCount, _parts);//
-    //     contracts.push(newContract);
-    //     // paymentContract[contractsCount] = newContract;
-    //     activeContracts[contractsCount] = true;
-    //     contractsCount++;
-    // }
+        uint _sum = 0;
+        for(uint i = 0; i < _partAmounts.length; i++){
+            _sum += _partAmounts[i];
+        }
+        require(_sum == _totalAmount, "total amount not equal with paymentParts");
+    }
+
+    function validatePaymentTimes(uint[] calldata _partTimes) view internal {
+        for (uint i=0; i < _partTimes.length; i++){
+            require(_partTimes[i] > block.timestamp, "time less than now");
+        }
+    }
+
+
 
     constructor () payable{
         contractsCount = 0;
         //--- set owner
     }
 
-    // function get(uint _id) public view returns(address){
-    //     return address(contracts[_id]);
-    // }
 
-    // function getArr() public view returns(PaymentContract[] memory){
-    //     return contracts;
-    // }
-
-    // function getMapping() public view returns(address[] memory){
-    //     address[] memory ret = new address[](contractsCount);
-    //     for (uint i = 0; i < contractsCount; i++) {
-    //         ret[i] = address(paymentContract[i]);
-    //     }
-    //     return ret;
-    // }
 
     //--- TODO: it has error. it sends a fixed size array, but i wanr dynamic array
     function getActiveContracts() public view returns(uint[] memory){
@@ -317,6 +314,10 @@ contract contractMaker is Ownable, Freezable {
         //--- TODO: Validations
         require(activeContracts[_id] == true, "not active");
         activeContracts[_id] = false;
+    }
+
+    function timeNow() public view returns (uint) {
+        return block.timestamp;
     }
 
     /* checkUpkeep Function is for CHainlink Keepers to see if its time to execute function performUpkeep */
