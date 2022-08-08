@@ -42,25 +42,38 @@ contract PaymentContract is Freezable {
     address judge;
 
     modifier hasWriteAccess {
-        require(admin == msg.sender || msg.sender == payer || msg.sender == receiver, "no access");
+        require(msg.sender == admin || msg.sender == payer || msg.sender == receiver, "no access");
         _;
     }
 
     uint payerFineAmount;
     uint receiverFineAmount;
 
+    //--- TODO: change its name to TimebasedParts
     struct Parts {
         uint time;
         uint amount;
         bool paid;
     }
 
+    // struct Parts2 {
+    //     uint time; // if time=0 then its event based
+    //     uint amount;
+    //     bool paid;
+    //     address approver; // if time=0 then approver address has to confirm the payment
+    // }
+
     uint public serviceProviderShare;
     uint public contractAmount;  // total contract token amount
 
-    uint totalPaymentsCount; //--- Total
-    uint installmentCount;  //--- installments that has set counts
-    mapping (uint => Parts) public installments;  //--- detail of each payment
+    uint public totalPaymentsCount; //--- Total
+    uint public installmentCount;  //--- installments that has set counts
+
+    //todo: use Parts[] public timebasedParts
+    mapping (uint => Parts) public installments;  //--- detail of each payment. (supposed to be like: uinxTime=>Parts but I forgot it and made it like Iterable Array which is not good.) Change it later and use Parts[] array
+    // Parts[] public timebasedParts;  //--- detail of each payment. Instead of installments variables
+
+
 
 
     // constructor (address _payer, address _receiver, uint _count, uint _totalAmount, address _token , uint _id) {
@@ -97,12 +110,15 @@ contract PaymentContract is Freezable {
     function setInstallment(uint _time, uint _amount) public {
         // require (totalPaymentsCount > 0 , "paymentCounts not specified");
         // require (installmentCount < totalPaymentsCount, "all installments are set");
-        installments[installmentCount].amount = _amount;
-        installments[installmentCount].time = _time;
-        installments[installmentCount].paid = false;
+
+        // installments[installmentCount].time = _time;
+        // installments[installmentCount].amount = _amount;
+        // installments[installmentCount].paid = false;
+        installments[installmentCount] = Parts(_time, _amount, false);
         installmentCount++;
     }
 
+    /* Done */
     function totalinstallmentAmount() external view returns (uint) {
         uint _sum = 0;
         for(uint i; i < installmentCount; i++){
@@ -111,25 +127,29 @@ contract PaymentContract is Freezable {
         return _sum;
     }
 
+    /* Done */
     function dayCalc(uint _days) public pure returns (uint) {
         return _days * 3600 * 24;
     }
 
     function installmentPartPay(uint _num) public {
-        //--- TODO : check time
+
+        require(!installments[_num].paid, "already paid");
+        //--- check time
         require(
             (block.timestamp < (installments[_num].time + dayCalc(1))
         &&
         (block.timestamp >= installments[_num].time)
             ) , "its not time");
 
-        require(!installments[_num].paid, "already paid");
+
 
         //--- TODO : transfer tokens
         token.transfer(receiver, installments[installmentCount].amount);
         installments[_num].paid = true;
     }
 
+    /* Done */
     function setTotalPaymentsCount(uint _num) external {
         totalPaymentsCount = _num;
     }
@@ -140,6 +160,7 @@ contract PaymentContract is Freezable {
         return contractAmount + payerFineAmount + serviceProviderShare;
     }
 
+    /* Done */
     function findFirstUnpaid() public view returns (uint){
         for(uint i; i < installmentCount; i++){
             if (installments[i].paid != true){
@@ -217,6 +238,32 @@ contract PaymentContract is Freezable {
     //     judge = _judge;
     // }
 
+    // address immutable contractMaker;
+    function todaysTx() isAdmin view public returns(bool, uint, uint, address, address){
+        uint _partNo = findFirstUnpaid();
+        Parts memory _part = installments[_partNo];
+        // if(block.timestamp >= _part.time && block.timestamp < _part.time + dayCalc(1) ){
+        if(isInTimeRange(_part.time)){
+            //--- Consider: Approve the amount to main contract so it can transferFrom. But it cant be VIEW and will cost
+            // setApprove(_part.amount);
+            return (true, contractID, _part.amount, receiver, address(token)); /*send contractID or this.address (1)*/
+        }
+        return(false, contractID,0,receiver, address(token));
+    }
+
+    function setApprove(uint _amount) internal returns(bool){
+        //--- TODO: validations
+        token.approve(admin, _amount);
+        return true;
+    }
+
+    function isInTimeRange(uint _time) view internal returns(bool){
+        if(block.timestamp >= _time && block.timestamp < _time + dayCalc(1) ){
+            return true;
+        }
+        return false;
+    }
+
     uint immutable contractID;
     // function test_finishContract() public {
     //     //--- run contractMaker (admin) to take out this contract from activeContracts
@@ -282,14 +329,15 @@ contract contractMaker is Ownable, Freezable {
 
     constructor () payable{
         contractsCount = 0;
-        //--- set owner
+        //--- TODO: set owner
     }
 
 
 
     //--- TODO: it has error. it sends a fixed size array, but i wanr dynamic array
     function getActiveContracts() public view returns(uint[] memory){
-        uint[] memory _actives = new uint[](contractsCount);
+        // uint[] memory _actives = new uint[](contractsCount);
+        uint[] memory _actives;
         uint _cnt = 0;
         for(uint i = 0; i <= contractsCount; i++){
             if (activeContracts[i]){
@@ -301,12 +349,59 @@ contract contractMaker is Ownable, Freezable {
         return _actives;
     }
 
+    // struct Parts {
+    //     uint time;
+    //     uint amount;
+    //     bool paid;
+    // }
+
+    // uint[] todayContracts; //--- wanted to have the list of contracts that today have tx
+    function getTodayPaymentContracts(uint[] memory _activeContracts) view public returns(uint[] memory){
+        uint[] memory _todayContracts;
+        uint _contractCount = 0;
+        for(uint i=0; i < _activeContracts.length; i++){
+
+            //--- todaysTx() => (true, contractID, _part.amount, receiver, address(token))
+            // (bool _have, uint _contractID, uint _amount , address _receiver, address _token) = contracts[i].todaysTx();
+            (bool _have, uint _contractID, , , ) = contracts[i].todaysTx();
+            if(_have){
+                _todayContracts[_contractCount] = _contractID;
+                _contractCount++;
+            }
+
+            // for(uint j=0; j < contracts[i].installmentCount(); j++){
+
+            // (uint _time, uint _amount , bool _paid) = Parts(contracts[i].installments[j]);
+            // uint _time = contracts[i].installments[j].time;
+
+            // (uint _time, uint _amount , bool _paid) = contracts[i].installments[j];
+            // Parts memory _part = contracts[i].installments[j];
+            // Parts memory _part = Parts(contracts[i].installments[j]);
+
+            // if(contracts[i].installments[j].paid == false
+            //     && contracts[i].installments[j].time >= block.timestamp
+            //     && contracts[i].installments[j].time <= block.timestamp + dayCalc(1)
+            // ){
+
+            // }
+
+            //--- Todo: Test: call each active contract and enquire them if they have any transactions today
+
+            // }
+
+        }
+        return _todayContracts;
+    }
+
+    function dayCalc(uint _days) public pure returns (uint) {
+        return _days * 3600 * 24;
+    }
+
     function setInstallment(uint _contractID, uint _time, uint _amount) external {
         //--- check and validate
         // paymentContract[_contractID].setInstallment(_time, _amount); // works
         contracts[_contractID].setInstallment(_time, _amount);
         // PaymentContract(contracts[_contractID]).setInstallment(_time, _amount);
-
     }
 
     //--- its payable so that later if wanted to transfer Eth/BNB from child contracts, we can do it easily
@@ -321,20 +416,52 @@ contract contractMaker is Ownable, Freezable {
     }
 
     /* checkUpkeep Function is for CHainlink Keepers to see if its time to execute function performUpkeep */
-    // function checkUpkeep(bytes calldata /* checkData */) external view returns (bool upkeepNeeded, bytes memory /* performData */) {
-    //--- using  getActiveContracts() get all active contracts to check if its time for them to pay
-    //     upkeepNeeded = (block.timestamp - lastTimeStamp) > interval;
-    //     // We don't use the checkData in this example. The checkData is defined when the Upkeep was registered.
-    // }
+    function checkUpkeep(bytes calldata /* checkData */) external view returns (bool upkeepNeeded, bytes memory /* performData */) {
+        //--- using  getActiveContracts() get all active contracts to check if its time for them to pay
+        uint[] memory _todayContracts = getTodayPaymentContracts(getActiveContracts());
+        if(_todayContracts.length > 0){
+            upkeepNeeded = true;
+        }
+        //     upkeepNeeded = (block.timestamp - lastTimeStamp) > interval;
+        //     // We don't use the checkData in this example. The checkData is defined when the Upkeep was registered.
+    }
 
-    // function performUpkeep(bytes calldata /* performData */) external {
-    //     //We highly recommend revalidating the upkeep in the performUpkeep function
-    //     if ((block.timestamp - lastTimeStamp) > interval ) {
-    //         lastTimeStamp = block.timestamp;
-    //         counter = counter + 1;
-    //     }
-    //     // We don't use the performData in this example. The performData is generated by the Keeper's call to your checkUpkeep function
-    // }
+    function performUpkeep(bytes calldata /* performData */) external {
+        //We highly recommend revalidating the upkeep in the performUpkeep function
+
+        // We don't use the performData in this example. The performData is generated by the Keeper's call to your checkUpkeep function
+    }
 
 
 }
+
+
+/*
+Things to Consider:
+
+- One payment per day from each Contract
+
+- when putting installments, have to sort them based on time before saving them
+    (because system is designed to find the first unpaid part and act based on that)
+
+- later I have to add some event based installment agreement to dapp.
+    (seperate it so waste less gas for iterating on installments)
+    (have to make a whitelist of accounts that are allowed to call event)
+
+*/
+
+
+/*
+Explainers:
+Based on numbers in comments at codes:
+
+(1) i used contractID instead of contract's address (this.address), so that in main contract I can check if its really one of our contracts
+    otherwise maybe a hacker sends other address for his malicious goals
+
+(2)
+
+()
+
+()
+
+*/
